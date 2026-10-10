@@ -1,0 +1,93 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:admin@postgres:5432/postgres
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-changeme-use-a-long-random-secret-in-production}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-http://localhost:9000}
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: relay-images
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=5)"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend/app
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_RTC_ICE_SERVERS: ${NEXT_PUBLIC_RTC_ICE_SERVERS:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: discord_clone_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: postgres
+    ports:
+      - "9232:5432"
+    volumes:
+      - discord_clone_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: discord_clone_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - discord_clone_minio:/data
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: discord_clone_minio_init
+    depends_on:
+      - minio
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        i=0
+        while [ "$$i" -lt 45 ]; do
+          if mc alias set local http://minio:9000 minioadmin minioadmin 2>/dev/null \
+            && mc mb local/relay-images --ignore-existing 2>/dev/null; then
+            mc anonymous set download local/relay-images 2>/dev/null || true
+            echo "MinIO bucket relay-images ready (public read)."
+            exit 0
+          fi
+          i=$$((i+1))
+          sleep 1
+        done
+        echo "MinIO init: serwer nie odpowiedział na czas." >&2
+        exit 1
+    restart: "no"
+
+volumes:
+  discord_clone_pgdata:
+  discord_clone_minio:

@@ -1,0 +1,11 @@
+.idea
+.venv
+.cursor
+.vscode
+.idea/
+dist/
+build/
+*.pyc
+.env
+.env.*
+!.env.example
